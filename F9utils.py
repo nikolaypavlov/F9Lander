@@ -11,6 +11,7 @@ class F9GameClient:
         self.socket.connect((ip, port))
         self.curState = None
         self.reset_game()
+        self.totalScore = 0
 
     def reset_game(self):
         # send init command | new game
@@ -31,13 +32,16 @@ class F9GameClient:
     def getReward(self, state):
         agent, _, system = state
         if system["flight_status"] == "landed":
-            return 2.0
+            score = 2.0
         elif self.isTerminalState(state):
-            return -2.0
+            score = -2.0
         elif agent["dist"] > 0.5:  # Remove this if you don't want to use handcrafted heuristic
-            return -1.0 + (1.0 / agent["dist"]) + agent["contact_time"]
+            score = -1.0 + (1.0 / agent["dist"]) + agent["contact_time"]
         else:
-            return 0.0
+            score = 0.0
+
+        self.totalScore += score
+        return score
 
     def actions(self, state=None):
         # returns legal actions, keys map [up, left, right, reset_game]
