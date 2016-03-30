@@ -64,7 +64,7 @@ ______________________________________________
 
 You can control rocket manually through keyboard or using external script through socket.
 
-__**"keyboard"**__
+####Keyboard mode
 
 **w** - main engine;
 
@@ -76,7 +76,7 @@ __**"keyboard"**__
 
 You can find more information about controls in **help.pdf**
 
-__**"socket"**__
+####Socket mode
 
 The `F9GameClient` class is a simple wraper to help you control rocket through the socket. See `F9utils.py` for more details.
 
