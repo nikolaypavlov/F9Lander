@@ -23,8 +23,7 @@ class F9GameClient:
         # "none" means that we don't know, whether we landed or destroyed
         agent, _, system = state
         status = False
-        if system["flight_status"] == "destroyed" or system["flight_status"] == "landed" or \
-                agent["fuel"] <= 0.0 or agent["py"] <= 0.0:
+        if system["flight_status"] == "destroyed" or system["flight_status"] == "landed" or agent["py"] <= 0.0:
             status = True
 
         return status
