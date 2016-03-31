@@ -16,27 +16,23 @@ import time
 
 # -------------------------------------------------- #
 
-FEATURES_NUM = 11
-BATCH_SIZE = 16
-MIN_REPLAY_SIZE = 1024
-STEP_SIZE = 1.0e-6
+FEATURES_NUM = 7
+BATCH_SIZE = 32
+MIN_REPLAY_SIZE = 2048
+STEP_SIZE = 1.0e-7
 GAMMA = 0.99
 EPS = 0.99
 SNAPSHOT_EVERY = 5000
 SNAPSHOT_PREFIX = 'snapshots/qsgd'
-SYNC_FIXED_MODEL = 512
+SYNC_FIXED_MODEL = 2048
 
 def featureExtractor(state, action):
     agent, platform, _ = state
     e1, e2, e3, _ = action
     features = np.array([agent['dist'],
                          agent['angle'],
-                         agent['vy'],
-                         agent['px'],
                          agent['contact'],
-                         agent['fuel'],
                          agent['wind'],
-                         platform['angle'],
                          e1,
                          e2,
                          e3],
@@ -68,6 +64,7 @@ def solve():
     ai = QSGDAgent(STEP_SIZE, GAMMA, client.actions, featureExtractor, FEATURES_NUM, EPS, SYNC_FIXED_MODEL)
     state = client.curState
     log = file("output.log", 'a')
+    learn = False
 
     # Load previous state from snapshot if any
     snapshot = load_snapshot(SNAPSHOT_PREFIX)
@@ -77,6 +74,12 @@ def solve():
         ai.gamma = snapshot["gamma"]
         ai.w = snapshot["weights"]
         ai.explorationProb = snapshot["explorationProb"]
+        client.totalScore = snapshot["totalScore"]
+
+    if not learn:
+        ai.explorationProb = 0
+        ai.numIters = 0
+        client.totalScore = 0
 
     while True:
         action = ai.getAction(state)
@@ -90,11 +93,13 @@ def solve():
             print "Agent state %s\n System state %s\n Reward %s\n Experience replay size %s\n" %\
                     (agent, system, reward, len(replay.experience))
 
-        if replay.getSize() >= MIN_REPLAY_SIZE:
+        if learn and replay.getSize() >= MIN_REPLAY_SIZE:
             batch = replay.mini_batch(BATCH_SIZE)
             loss = ai.updateWeights(batch)
             log.write("Iteration: %s Score: %s Loss: %s Reward: %s Action %s Epsilon: %s Learning rate %s\n" %\
                       (ai.numIters, int(client.totalScore), loss, reward, action, ai.explorationProb, ai.learning_rate))
+        elif not learn:
+            log.write("Iteration: %s Score: %s Reward: %s Action %s\n" % (ai.numIters, int(client.totalScore), reward, action))
 
         # system_state["flight_status"] | "none", "landed", "destroyed"
         # "none" means that we don't know, whether we landed or destroyed
@@ -110,7 +115,8 @@ def solve():
                            "learning_rate": ai.learning_rate,
                            "gamma": ai.gamma,
                            "weights": ai.w,
-                           "explorationProb": ai.explorationProb}, SNAPSHOT_PREFIX)
+                           "explorationProb": ai.explorationProb,
+                           "totalScore": client.totalScore}, SNAPSHOT_PREFIX)
 
 if __name__ == "__main__":
     solve()
