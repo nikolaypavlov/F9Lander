@@ -30,14 +30,13 @@ class F9GameClient:
 
     def getReward(self, state):
         agent, _, system = state
+        score = 0.0
         if system["flight_status"] == "landed":
-            score = 2.0
+            score = 1.0
         elif self.isTerminalState(state):
-            score = -2.0
-        elif agent["dist"] > 0.5:  # Remove this if you don't want to use handcrafted heuristic
-            score = -1.0 + (1.0 / agent["dist"]) + agent["contact_time"]
-        else:
-            score = 0.0
+            score = -1.0
+        else:  # Remove this if you don't want to use handcrafted heuristic
+            score = 1.0 / (1 + agent["dist"]) + agent["contact_time"]
 
         self.totalScore += score
         return score
@@ -60,8 +59,19 @@ class F9GameClient:
         return state
 
     def doAction(self, action):
+        # act in the game environment
         if any([action == act for act in self.actions()]):
             self.socket.send(str(action))
             self.curState = self.getServerState()
         else:
             print "Invalid Action"
+
+class RLAgent:
+    """Abstract class: an RLAgent performs reinforcement learning.
+    The game client will call getAction() to get an action, perform the action, and
+    then provide feedback (via provideFeedback()) to the RL algorithm, so it can learn."""
+    def getAction(self, state):
+        raise NotImplementedError("Override me")
+
+    def provideFeedback(self, state, action, reward, new_state):
+        raise NotImplementedError("Override me")
