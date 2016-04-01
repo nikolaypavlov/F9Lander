@@ -12,8 +12,8 @@ import time
 
 # -------------------------------------------------- #
 
-FEATURES_NUM = 14
-MAX_ITERS = 50000
+FEATURES_NUM = 10
+MAX_ITERS = 25000
 
 def featureExtractor(state, action):
     agent, platform, _ = state
@@ -22,13 +22,9 @@ def featureExtractor(state, action):
                          agent['angle'],
                          agent['vx'],
                          agent['vy'],
-                         agent['px'],
-                         agent['py'],
                          agent['contact'],
                          agent['wind'],
                          agent['fuel'],
-                         platform['px'],
-                         platform['py'],
                          e1,
                          e2,
                          e3],
