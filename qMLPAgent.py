@@ -22,7 +22,7 @@ N_BATCH = 128
 DECAY = 1e-5
 # Mini-batch size
 BATCH_SIZE = 32
-# Bellman equation gamma parameter
+# Discount factor gamma
 GAMMA = 0.99
 # Epsilon-greedy policy parameters
 EPS = 0.99
@@ -40,10 +40,11 @@ SNAPSHOT_PREFIX = 'snapshots/qmlp'
 
 class QMLPAgent(RLAgent):
     """Q-Learning agent with MLP function approximation"""
-    def __init__(self, actions, featureExtractor, featuresNum):
+    def __init__(self, actions, featureExtractor, isTerminalState, featuresNum):
         self.actions = actions
         self.featuresNum = featuresNum
         self.featureExtractor = featureExtractor
+        self.isTerminalState = isTerminalState
         self.explorationProb = EPS
         self.explorationProb0_ = EPS
         self.numIters = 0
@@ -107,7 +108,7 @@ class QMLPAgent(RLAgent):
     # Epsilon-greedy policy
     def getAction(self, state):
         self.numIters += 1
-        if random.random() < self.explorationProb:
+        if self.replay.getSize() < MIN_REPLAY_SIZE or random.random() < self.explorationProb:
             return random.choice(self.actions(state))
         else:
             return self._getOptAction(state)
@@ -123,12 +124,15 @@ class QMLPAgent(RLAgent):
 
             for i, sars in enumerate(batch):
                 state, action, reward, new_state = sars
-                maxQ, _ = self._getQOpt(new_state)
-                target[i] = reward + self.gamma * maxQ
+                if self.isTerminalState(new_state):
+                    target[i] = reward
+                else:
+                    maxQ, _ = self._getQOpt(new_state)
+                    target[i] = reward + self.gamma * maxQ
                 features[i] = self.featureExtractor(state, action)
 
             loss = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
-            self.explorationProb = self.explorationProb0_ / pow(self.numIters, POWER)
+            self.explorationProb = self.explorationProb0_ / pow(self.numIters - MIN_REPLAY_SIZE + 1, POWER)
 
             self.log.write("Iteration: %s Score: %s Loss: %s Reward: %s Action %s Epsilon: %s\n" %\
                             (self.numIters, int(self.total_reward), loss, reward, action, self.explorationProb))

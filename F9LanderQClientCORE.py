@@ -13,6 +13,7 @@ import time
 # -------------------------------------------------- #
 
 FEATURES_NUM = 14
+MAX_ITERS = 50000
 
 def featureExtractor(state, action):
     agent, platform, _ = state
@@ -38,10 +39,10 @@ def featureExtractor(state, action):
 def solve():
     # Setup agent and experience replay
     client = F9GameClient()
-    ai = QMLPAgent(client.actions, featureExtractor, FEATURES_NUM)
+    ai = QMLPAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
     state = client.curState
 
-    while True:
+    while ai.numIters <= MAX_ITERS:
         action = ai.getAction(state)
         client.doAction(action)
         new_state = client.curState
