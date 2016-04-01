@@ -1,5 +1,11 @@
+from F9utils import RLAgent
+from experienceReplay import ExperienceReplay
+import cPickle as pickle
+import glob
+import os
 import numpy as np
 import random
+
 from sklearn.preprocessing import StandardScaler
 import theano
 import theano.tensor as T
@@ -13,34 +19,53 @@ N_HIDDEN = 512
 # Number of training sequences in each batch
 N_BATCH = 128
 # Weight decay
-DECAY = 0.0
+DECAY = 1e-5
+# Mini-batch size
+BATCH_SIZE = 32
+# Bellman equation gamma parameter
+GAMMA = 0.99
+# Epsilon-greedy policy parameters
+EPS = 0.99
+POWER = 0.1
+# Log file path
+LOG_FILE = "output.log"
 
-class QMLPAgent:
+# Wait till replay accumulate some experience than start learning
+MIN_REPLAY_SIZE = 4096
+SYNC_FIXED_MODEL = 2048
+
+# Take snapshots
+SNAPSHOT_EVERY = 5000
+SNAPSHOT_PREFIX = 'snapshots/qmlp'
+
+class QMLPAgent(RLAgent):
     """Q-Learning agent with MLP function approximation"""
-    def __init__(self, learning_rate, gamma, actions, featureExtractor, featuresNum, explorationProb=0.2, syncInterval=None):
-        self.learning_rate = learning_rate
-        self.gamma = gamma
-        self.featuresNum = featuresNum
+    def __init__(self, actions, featureExtractor, featuresNum):
         self.actions = actions
+        self.featuresNum = featuresNum
         self.featureExtractor = featureExtractor
-        self.explorationProb = explorationProb
-        self.explorationProb0_ = explorationProb
+        self.explorationProb = EPS
+        self.explorationProb0_ = EPS
         self.numIters = 0
-        self.syncInterval = syncInterval
-        self.net, self.train, self.predict = self.create_network()
+        self.total_reward = 0
+        self.gamma = GAMMA
+        # self.syncInterval = SYNC_FIXED_MODEL
+        self.log = file(LOG_FILE, 'a')
+        self.replay = ExperienceReplay()
+        self.net, self.train, self.predict = self._create_network()
 
         # self._syncModel()
 
-    def build_network(self):
+    def _build_network(self):
         l_in = InputLayer(shape=(None, self.featuresNum), name="input")
         l_forward_1 = batch_norm(DenseLayer(l_in, num_units=N_HIDDEN, nonlinearity=lasagne.nonlinearities.rectify, name="fc1"))
         l_out = batch_norm(DenseLayer(l_forward_1, num_units=1, nonlinearity=lasagne.nonlinearities.identity, name="out"))
 
         return l_out, l_in.input_var
 
-    def create_network(self):
+    def _create_network(self):
         print("Building network ...")
-        net, input_var = self.build_network()
+        net, input_var = self._build_network()
         target_values = T.matrix('target_output')
 
         # lasagne.layers.get_output produces a variable for the output of the net
@@ -68,15 +93,16 @@ class QMLPAgent:
         #     self.fixedModel.coef_ = np.copy(self.model.coef_)
         #     self.fixedModel.intercept_ = np.copy(self.model.intercept_)
 
-    def getQOpt(self, state):
+    def _getQOpt(self, state):
         features = np.zeros((len(self.actions(state)), self.featuresNum))
         for i, action in enumerate(self.actions(state)):
             features[i] = self.featureExtractor(state, action)
+
         pred = self.predict(features.astype(theano.config.floatX))
         return (pred.max(), self.actions(state)[pred.argmax()])
 
-    def getOptAction(self, state):
-        return self.getQOpt(state)[1]
+    def _getOptAction(self, state):
+        return self._getQOpt(state)[1]
 
     # Epsilon-greedy policy
     def getAction(self, state):
@@ -84,19 +110,43 @@ class QMLPAgent:
         if random.random() < self.explorationProb:
             return random.choice(self.actions(state))
         else:
-            return self.getOptAction(state)
+            return self._getOptAction(state)
 
-    def updateWeights(self, batch):
-        target = np.zeros((len(batch), 1), dtype=np.float64)
-        features = np.zeros((len(batch), self.featuresNum), dtype=np.float64)
-        for i, sars in enumerate(batch):
-            state, action, reward, new_state = sars
-            maxQ, _ = self.getQOpt(new_state)
+    def provideFeedback(self, state, action, reward, new_state):
+        self.replay.append(state, action, reward, new_state) # Put new data to experience replay
+        self.total_reward += reward
 
-            target[i] = reward + self.gamma * maxQ
-            features[i] = self.featureExtractor(state, action)
+        if self.replay.getSize() >= MIN_REPLAY_SIZE:
+            batch = self.replay.mini_batch(BATCH_SIZE)
+            target = np.zeros((len(batch), 1), dtype=np.float64)
+            features = np.zeros((len(batch), self.featuresNum), dtype=np.float64)
 
-        loss = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
-        self.explorationProb = self.explorationProb0_ / pow(self.numIters, 0.05)
+            for i, sars in enumerate(batch):
+                state, action, reward, new_state = sars
+                maxQ, _ = self._getQOpt(new_state)
+                target[i] = reward + self.gamma * maxQ
+                features[i] = self.featureExtractor(state, action)
 
-        return loss
+            loss = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
+            self.explorationProb = self.explorationProb0_ / pow(self.numIters, POWER)
+
+            self.log.write("Iteration: %s Score: %s Loss: %s Reward: %s Action %s Epsilon: %s\n" %\
+                            (self.numIters, int(self.total_reward), loss, reward, action, self.explorationProb))
+
+    def _save_snapshot(state, prefix):
+        file_path = '_'.join([prefix, str(state['epoch'])])
+        f = file(''.join([file_path, '.pkl']), 'wb')
+        pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+    def _load_snapshot(prefix):
+        file_path = glob.glob(''.join([prefix, "*_[0-9]*.pkl"]))
+        file_path.sort(key=os.path.getctime)
+        state = None
+        if len(file_path):
+            f = file(file_path[-1], 'rb')
+            print "Loading snapshot", file_path[-1]
+            state = pickle.load(f)
+            f.close()
+
+        return state
