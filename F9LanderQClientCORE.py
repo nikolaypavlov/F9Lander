@@ -8,7 +8,7 @@ import cPickle as pickle
 import glob
 import os
 from experienceReplay import *
-from qSGDAgent import QSGDAgent
+from qMLPAgent import QMLPAgent
 from F9utils import F9GameClient
 
 # for delay in debug launch
@@ -16,14 +16,14 @@ import time
 
 # -------------------------------------------------- #
 
-FEATURES_NUM = 7
+FEATURES_NUM = 13
 BATCH_SIZE = 32
-MIN_REPLAY_SIZE = 2048
+MIN_REPLAY_SIZE = 1024
 STEP_SIZE = 1.0e-7
 GAMMA = 0.99
 EPS = 0.99
 SNAPSHOT_EVERY = 5000
-SNAPSHOT_PREFIX = 'snapshots/qsgd'
+SNAPSHOT_PREFIX = 'snapshots/qmlp'
 SYNC_FIXED_MODEL = 2048
 
 def featureExtractor(state, action):
@@ -31,8 +31,14 @@ def featureExtractor(state, action):
     e1, e2, e3, _ = action
     features = np.array([agent['dist'],
                          agent['angle'],
+                         agent['vx'],
+                         agent['vy'],
+                         agent['px'],
+                         agent['py'],
                          agent['contact'],
                          agent['wind'],
+                         agent['fuel'],
+                         platform['px'],
                          e1,
                          e2,
                          e3],
@@ -61,20 +67,20 @@ def solve():
     # Setup agent and experience replay
     replay = ExperienceReplay()
     client = F9GameClient()
-    ai = QSGDAgent(STEP_SIZE, GAMMA, client.actions, featureExtractor, FEATURES_NUM, EPS, SYNC_FIXED_MODEL)
+    ai = QMLPAgent(STEP_SIZE, GAMMA, client.actions, featureExtractor, FEATURES_NUM, EPS, SYNC_FIXED_MODEL)
     state = client.curState
     log = file("output.log", 'a')
-    learn = False
+    learn = True
 
     # Load previous state from snapshot if any
-    snapshot = load_snapshot(SNAPSHOT_PREFIX)
-    if snapshot is not None:
-        ai.numIters = snapshot["epoch"]
-        ai.learning_rate = snapshot["learning_rate"]
-        ai.gamma = snapshot["gamma"]
-        ai.w = snapshot["weights"]
-        ai.explorationProb = snapshot["explorationProb"]
-        client.totalScore = snapshot["totalScore"]
+    # snapshot = load_snapshot(SNAPSHOT_PREFIX)
+    # if snapshot is not None:
+    #     ai.numIters = snapshot["epoch"]
+    #     ai.learning_rate = snapshot["learning_rate"]
+    #     ai.gamma = snapshot["gamma"]
+    #     ai.w = snapshot["weights"]
+    #     ai.explorationProb = snapshot["explorationProb"]
+    #     client.totalScore = snapshot["totalScore"]
 
     if not learn:
         ai.explorationProb = 0
@@ -110,13 +116,13 @@ def solve():
             state = new_state
 
         # Create snapshot
-        if ai.numIters % SNAPSHOT_EVERY == 0:
-            save_snapshot({"epoch": ai.numIters,
-                           "learning_rate": ai.learning_rate,
-                           "gamma": ai.gamma,
-                           "weights": ai.w,
-                           "explorationProb": ai.explorationProb,
-                           "totalScore": client.totalScore}, SNAPSHOT_PREFIX)
+        # if ai.numIters % SNAPSHOT_EVERY == 0:
+        #     save_snapshot({"epoch": ai.numIters,
+        #                    "learning_rate": ai.learning_rate,
+        #                    "gamma": ai.gamma,
+        #                    "weights": ai.w,
+        #                    "explorationProb": ai.explorationProb,
+        #                    "totalScore": client.totalScore}, SNAPSHOT_PREFIX)
 
 if __name__ == "__main__":
     solve()
