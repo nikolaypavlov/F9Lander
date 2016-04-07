@@ -17,7 +17,7 @@ from lasagne.objectives import squared_error
 # Number of units in the hidden (recurrent) layer
 N_HIDDEN = 512
 # Number of training sequences in each batch
-N_BATCH = 128
+N_BATCH = 1024
 # Weight decay
 DECAY = 1e-5
 # Mini-batch size
@@ -31,7 +31,7 @@ POWER = 0.1
 LOG_FILE = "output.log"
 
 # Wait till replay accumulate some experience than start learning
-MIN_REPLAY_SIZE = 4096
+MIN_REPLAY_SIZE = 128
 SYNC_FIXED_MODEL = 2048
 
 # Take snapshots
@@ -72,7 +72,7 @@ class QMLPAgent(RLAgent):
         # lasagne.layers.get_output produces a variable for the output of the net
         network_output = lasagne.layers.get_output(net)
         cost = squared_error(network_output, target_values).mean()
-        # cost += regularize_network_params(net, l2) * DECAY
+        cost += regularize_network_params(net, l2) * DECAY
 
         # Retrieve all parameters from the network
         all_params = lasagne.layers.get_all_params(net, trainable=True)
@@ -123,13 +123,13 @@ class QMLPAgent(RLAgent):
             features = np.zeros((len(batch), self.featuresNum), dtype=np.float64)
 
             for i, sars in enumerate(batch):
-                state, action, reward, new_state = sars
-                if self.isTerminalState(new_state):
-                    target[i] = reward
+                b_state, b_action, b_reward, b_new_state = sars
+                if self.isTerminalState(b_new_state):
+                    target[i] = b_reward
                 else:
-                    maxQ, _ = self._getQOpt(new_state)
-                    target[i] = reward + self.gamma * maxQ
-                features[i] = self.featureExtractor(state, action)
+                    maxQ, _ = self._getQOpt(b_new_state)
+                    target[i] = b_reward + self.gamma * maxQ
+                features[i] = self.featureExtractor(b_state, b_action)
 
             loss = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
             self.explorationProb = self.explorationProb0_ / pow(self.numIters - MIN_REPLAY_SIZE + 1, POWER)
