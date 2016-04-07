@@ -4,7 +4,8 @@
 # -------------------------------------------------- #
 
 import numpy as np
-from qMLPAgent import QMLPAgent
+from qMLPMultiAction import QMLPMultiActionAgent
+# from qAgent import QAgent
 from F9utils import F9GameClient
 
 # for delay in debug launch
@@ -12,22 +13,22 @@ import time
 
 # -------------------------------------------------- #
 
-FEATURES_NUM = 10
+FEATURES_NUM = 7
 MAX_ITERS = 25000
 
-def featureExtractor(state, action):
+def featureExtractor(state, action=None):
     agent, platform, _ = state
-    e1, e2, e3, _ = action
+    # e1, e2, e3, _ = action
     features = np.array([agent['dist'],
                          agent['angle'],
                          agent['vx'],
                          agent['vy'],
                          agent['contact'],
                          agent['wind'],
-                         agent['fuel'],
-                         e1,
-                         e2,
-                         e3],
+                         agent['fuel']],
+                         # e1,
+                         # e2,
+                         # e3],
                          dtype=np.float64)
     assert(len(features) == FEATURES_NUM)
     return features
@@ -35,8 +36,10 @@ def featureExtractor(state, action):
 def solve():
     # Setup agent and experience replay
     client = F9GameClient()
-    ai = QMLPAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
+    ai = QMLPMultiActionAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
+    # ai = QAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
     state = client.curState
+    scores = []
 
     while ai.numIters <= MAX_ITERS:
         action = ai.getAction(state)
@@ -50,8 +53,12 @@ def solve():
         if client.isTerminalState(new_state):
             client.reset_game()
             state = client.curState
+            scores.append(ai.total_reward)
+            ai.total_reward = 0
         else:
             state = new_state
+
+    print "Average game score: ", np.mean(scores)
 
 if __name__ == "__main__":
     solve()
