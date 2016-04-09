@@ -1,10 +1,9 @@
 from F9utils import RLAgent
+from F9utils import Snapshot
 from experienceReplay import ExperienceReplay
-import cPickle as pickle
-import glob
-import os
 import numpy as np
 import random
+import logging
 
 from sklearn.preprocessing import StandardScaler
 import theano
@@ -16,68 +15,84 @@ from lasagne.objectives import squared_error
 
 # Number of units in the hidden (recurrent) layer
 N_HIDDEN = 512
-# Number of training sequences in each batch
-N_BATCH = 1024
 # Weight decay
-DECAY = 1e-5
+DECAY = 1.0e-6
 # Mini-batch size
 BATCH_SIZE = 32
 # Discount factor gamma
 GAMMA = 0.99
 # Epsilon-greedy policy parameters
-EPS = 0.99
-POWER = 0.1
+EPS0 = 1.0
+EPS = 0.1
 # Log file path
 LOG_FILE = "output.log"
 
 # Wait till replay accumulate some experience than start learning
-MIN_REPLAY_SIZE = 2048
-SYNC_FIXED_MODEL = 2048
+MIN_REPLAY_SIZE = 1000
+SYNC_TARGET_MODEL = 5000
 
 # Take snapshots
-SNAPSHOT_EVERY = 5000
+SNAPSHOT_EVERY = 10000
 SNAPSHOT_PREFIX = 'snapshots/qmlp'
 
 class QMLPMultiActionAgent(RLAgent):
     """Q-Learning agent with MLP function approximation"""
-    def __init__(self, actions, featureExtractor, isTerminalState, featuresNum):
+    def __init__(self, actions, featureExtractor, isTerminalState, featuresNum, max_iters):
         self.actions = actions
         self.actionsNum = len(actions())
         self.featuresNum = featuresNum
         self.featureExtractor = featureExtractor
         self.isTerminalState = isTerminalState
-        self.explorationProb = EPS
-        self.explorationProb0_ = EPS
+        self.explorationProb = EPS0
         self.numIters = 0
+        self.max_iters = max_iters
+        self.start_learning = False
         self.total_reward = 0
         self.gamma = GAMMA
-        self.log = file(LOG_FILE, 'a')
-        self.replay = ExperienceReplay()
-        self.model, self.train, self.predict = self._create_network()
-        self.fixedModel, _, self.predictFixed = self._create_network()
-        self.syncInterval = SYNC_FIXED_MODEL
+        self.replay = ExperienceReplay(clean_at=MIN_REPLAY_SIZE)
 
+        logging.basicConfig(filename=LOG_FILE, level=logging.DEBUG)
+        self.snapshot = Snapshot(SNAPSHOT_PREFIX)
+
+        self.model, self.train, self.predict = self._create_network()
+        self.targetModel, self.predictTarget = self._create_fixed_network()
         self._syncModel()
+        self._load_snapshot()
 
     def _build_network(self):
         l_in = InputLayer(shape=(None, self.featuresNum), name="input")
         l_forward_1 = batch_norm(DenseLayer(l_in, num_units=N_HIDDEN, nonlinearity=lasagne.nonlinearities.rectify, name="fc1"))
-        l_out = batch_norm(DenseLayer(l_forward_1, num_units=self.actionsNum, nonlinearity=lasagne.nonlinearities.identity, name="out"))
+        l_out = DenseLayer(l_forward_1, num_units=self.actionsNum, nonlinearity=lasagne.nonlinearities.identity, name="out")
 
         return l_out, l_in.input_var
+
+    def _create_fixed_network(self):
+        print("Building network with fixed weights...")
+        net, input_var = self._build_network()
+
+        # Theano functions for training and computing cost
+        print("Compiling functions ...")
+        predict = theano.function([input_var], lasagne.layers.get_output(net))
+
+        return net, predict
 
     def _create_network(self):
         print("Building network ...")
         net, input_var = self._build_network()
         target_values = T.matrix('target_output')
-        # mask = theano.shared(np.zeros((BATCH_SIZE, self.actionsNum)).astype(np.int32))
-        # mask = T.set_subtensor(mask[np.arange(BATCH_SIZE), target_values.argmax(1)], 1)
+        maxQ_idx = target_values.argmax(1)
+
+        # Create masks
+        mask = theano.shared(np.ones((BATCH_SIZE, self.actionsNum)).astype(np.int32))
+        maxQ_mask = theano.shared(np.zeros((BATCH_SIZE, self.actionsNum)).astype(np.int32))
+        mask = T.set_subtensor(mask[np.arange(BATCH_SIZE), maxQ_idx], 0)
+        maxQ_mask = T.set_subtensor(maxQ_mask[np.arange(BATCH_SIZE), maxQ_idx], 1)
 
         # lasagne.layers.get_output produces a variable for the output of the net
         network_output = lasagne.layers.get_output(net)
-        # new_network_output = network_output * mask
-        # new_target_values = target_values * mask
-        cost = squared_error(network_output, target_values).mean()
+        new_target_values = target_values * maxQ_mask + network_output * mask
+
+        cost = squared_error(network_output, new_target_values).mean()
 
         # Add regularization penalty
         cost += regularize_network_params(net, l2) * DECAY
@@ -90,23 +105,21 @@ class QMLPMultiActionAgent(RLAgent):
 
         # Theano functions for training and computing cost
         print("Compiling functions ...")
-        train = theano.function([input_var, target_values], cost, updates=updates)
+        train = theano.function([input_var, target_values], [cost, new_target_values, network_output, maxQ_idx], updates=updates)
         predict = theano.function([input_var], lasagne.layers.get_output(net))
 
         return net, train, predict
 
     def _syncModel(self):
-        if self.syncInterval is not None:
-            all_param_values = lasagne.layers.get_all_param_values(self.model)
-            lasagne.layers.set_all_param_values(self.fixedModel, all_param_values)
-
-    def _getQOpt(self, state):
-        pred = self.predict(self.featureExtractor(state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
-        self.log.write("Prediction %s\n" % pred)
-        return (pred.max(), self.actions(state)[pred.argmax()], pred.argmax())
+        net_params = lasagne.layers.get_all_param_values(self.model)
+        fixed_net_param = lasagne.layers.get_all_param_values(self.targetModel)
+        diff = np.mean([np.mean(layer - fixed_net_param[i]) for i, layer in enumerate(net_params)])
+        logging.debug("Syncing models, average weight diff %s" % diff)
+        lasagne.layers.set_all_param_values(self.targetModel, net_params)
 
     def _getOptAction(self, state):
-        return self._getQOpt(state)[1]
+        pred = self.predict(self.featureExtractor(state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
+        return self.actions(state)[pred.argmax()]
 
     # Epsilon-greedy policy
     def getAction(self, state):
@@ -119,46 +132,58 @@ class QMLPMultiActionAgent(RLAgent):
     def provideFeedback(self, state, action, reward, new_state):
         self.replay.append(state, action, reward, new_state) # Put new data to experience replay
         self.total_reward += reward
+        if self.replay.getSize() > MIN_REPLAY_SIZE:
+            self.start_learning = True
 
-        if self.replay.getSize() >= MIN_REPLAY_SIZE:
+        if self.start_learning:
             batch = self.replay.mini_batch(BATCH_SIZE)
-            target = np.zeros((len(batch), self.actionsNum), dtype=np.float64)
-            features = np.zeros((len(batch), self.featuresNum), dtype=np.float64)
+            target = np.zeros((BATCH_SIZE, self.actionsNum), dtype=np.float64)
+            features = np.zeros((BATCH_SIZE, self.featuresNum), dtype=np.float64)
 
             for i, sars in enumerate(batch):
                 b_state, b_action, b_reward, b_new_state = sars
                 features[i] = self.featureExtractor(b_state)
 
                 if self.isTerminalState(b_new_state):
-                    target[i].fill(b_reward)
+                    target[i].fill(b_reward - 1)
+                    target[i][np.random.randint(0, self.actionsNum)] = b_reward
                 else:
-                    pred = self.predictFixed(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
-                    target[i] = b_reward + self.gamma * pred
+                    # Double Q-learning target
+                    act = np.argmax(self.predict(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX)), 1)
+                    q_vals = self.predictTarget(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
+                    t = b_reward + self.gamma * np.ravel(q_vals)
+                    target[i] = np.tile(t[act] - 1, self.actionsNum)
+                    target[i][act] = t[act]
 
-            _ = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
-            self.explorationProb = self.explorationProb0_ / pow(self.numIters - MIN_REPLAY_SIZE + 1, POWER)
+            assert(target.shape == (BATCH_SIZE, self.actionsNum))
+            loss, target_val, net_out, maxQ_idx = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
+            self.explorationProb -= (EPS0 - EPS) / (self.max_iters - MIN_REPLAY_SIZE)
 
-            # self.log.write("Iteration: %s Score: %s Loss: %s Reward: %s Action %s Epsilon: %s\n" %\
-            #                 (self.numIters, int(self.total_reward), loss, reward, action, self.explorationProb))
+            logging.info("Iteration: %s Replay: %s TD-err: %s Reward: %s Action %s Epsilon: %s" %\
+                            (self.numIters, self.replay.getSize(), loss, reward, action, self.explorationProb))
+            # logging.debug("Number of different values %s\n maxQ_idx %s\n" % (np.sum(np.invert(np.isclose(target_val, net_out))), maxQ_idx))
 
-        if self.syncInterval is not None and self.numIters % self.syncInterval == 0:
-            self.log.write("Syncing models\n")
-            self._syncModel()
+            if self.numIters % SYNC_TARGET_MODEL == 0:
+                self._syncModel()
 
-    def _save_snapshot(state, prefix):
-        file_path = '_'.join([prefix, str(state['epoch'])])
-        f = file(''.join([file_path, '.pkl']), 'wb')
-        pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
-        f.close()
+            if self.numIters % SNAPSHOT_EVERY == 0:
+                self._save_snapshot()
 
-    def _load_snapshot(prefix):
-        file_path = glob.glob(''.join([prefix, "*_[0-9]*.pkl"]))
-        file_path.sort(key=os.path.getctime)
-        state = None
-        if len(file_path):
-            f = file(file_path[-1], 'rb')
-            print "Loading snapshot", file_path[-1]
-            state = pickle.load(f)
-            f.close()
+    def _save_snapshot(self):
+        snap = {"iter": self.numIters,
+                "epsilon": self.explorationProb,
+                "target_params": lasagne.layers.get_all_param_values(self.targetModel),
+                "params": lasagne.layers.get_all_param_values(self.model),
+                "replay": self.replay,
+                "start_learning": self.start_learning}
+        self.snapshot.save(snap, self.numIters)
 
-        return state
+    def _load_snapshot(self):
+        snap = self.snapshot.load()
+        if snap is not None:
+            lasagne.layers.set_all_param_values(self.model, snap['params'])
+            lasagne.layers.set_all_param_values(self.targetModel, snap['target_params'])
+            self.numIters = snap["iter"]
+            self.explorationProb = snap["epsilon"]
+            self.replay = snap["replay"]
+            self.start_learning = snap["start_learning"]
