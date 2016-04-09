@@ -18,19 +18,18 @@ N_HIDDEN = 512
 # Weight decay
 DECAY = 1.0e-6
 # Mini-batch size
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 # Discount factor gamma
 GAMMA = 0.99
 # Epsilon-greedy policy parameters
 EPS0 = 1.0
 EPS = 0.1
-# Log file path
-LOG_FILE = "output.log"
-
+# Synchronise target model afterwhile
+SYNC_TARGET_MODEL = 5000
 # Wait till replay accumulate some experience than start learning
 MIN_REPLAY_SIZE = 1000
-SYNC_TARGET_MODEL = 5000
-
+# Log file path
+LOG_FILE = "output.log"
 # Take snapshots
 SNAPSHOT_EVERY = 10000
 SNAPSHOT_PREFIX = 'snapshots/qmlp'
@@ -62,7 +61,8 @@ class QMLPMultiActionAgent(RLAgent):
     def _build_network(self):
         l_in = InputLayer(shape=(None, self.featuresNum), name="input")
         l_forward_1 = batch_norm(DenseLayer(l_in, num_units=N_HIDDEN, nonlinearity=lasagne.nonlinearities.rectify, name="fc1"))
-        l_out = DenseLayer(l_forward_1, num_units=self.actionsNum, nonlinearity=lasagne.nonlinearities.identity, name="out")
+        l_forward_2 = batch_norm(DenseLayer(l_forward_1, num_units=N_HIDDEN, nonlinearity=lasagne.nonlinearities.rectify, name="fc2"))
+        l_out = DenseLayer(l_forward_2, num_units=self.actionsNum, nonlinearity=lasagne.nonlinearities.identity, name="out")
 
         return l_out, l_in.input_var
 
@@ -158,10 +158,11 @@ class QMLPMultiActionAgent(RLAgent):
             assert(target.shape == (BATCH_SIZE, self.actionsNum))
             loss, target_val, net_out, maxQ_idx = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
             self.explorationProb -= (EPS0 - EPS) / (self.max_iters - MIN_REPLAY_SIZE)
+            assert(np.sum(np.invert(np.isclose(target_val, net_out))) <= BATCH_SIZE)
 
             logging.info("Iteration: %s Replay: %s TD-err: %s Reward: %s Action %s Epsilon: %s" %\
                             (self.numIters, self.replay.getSize(), loss, reward, action, self.explorationProb))
-            # logging.debug("Number of different values %s\n maxQ_idx %s\n" % (np.sum(np.invert(np.isclose(target_val, net_out))), maxQ_idx))
+            logging.debug("maxQ_idx %s" % maxQ_idx)
 
             if self.numIters % SYNC_TARGET_MODEL == 0:
                 self._syncModel()
