@@ -1,4 +1,7 @@
 import socket
+import cPickle as pickle
+import glob
+import os
 
 RESET_CMD = str([0, 0, 0, 1])
 DEFAULT_IP = '127.0.0.1'
@@ -32,9 +35,9 @@ class F9GameClient:
         agent, _, system = state
         score = 0.0
         if system["flight_status"] == "landed":
-            score = 1.0
+            score = 100.0
         elif self.isTerminalState(state):
-            score = -1.0
+            score = -100.0
         else:  # Remove this if you don't want to use handcrafted heuristic
             score = 1.0 / (1 + agent["dist"]) + agent["contact_time"]
 
@@ -75,3 +78,25 @@ class RLAgent:
 
     def provideFeedback(self, state, action, reward, new_state):
         raise NotImplementedError("Override me")
+
+class Snapshot:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def save(self, state, num):
+        file_path = '_'.join([self.prefix, str(num)])
+        f = file(''.join([file_path, '.pkl']), 'wb')
+        pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.close()
+
+    def load(self):
+        file_path = glob.glob(''.join([self.prefix, "*_[0-9]*.pkl"]))
+        file_path.sort(key=os.path.getctime)
+        state = None
+        if len(file_path):
+            f = file(file_path[-1], 'rb')
+            print "Loading snapshot", file_path[-1]
+            state = pickle.load(f)
+            f.close()
+
+        return state
