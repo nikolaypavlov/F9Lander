@@ -13,8 +13,8 @@ import time
 
 # -------------------------------------------------- #
 
-FEATURES_NUM = 7
-MAX_ITERS = 25000
+FEATURES_NUM = 11
+MAX_ITERS = 1000000
 
 def featureExtractor(state, action=None):
     agent, platform, _ = state
@@ -23,9 +23,13 @@ def featureExtractor(state, action=None):
                          agent['angle'],
                          agent['vx'],
                          agent['vy'],
+                         agent['px'],
+                         agent['py'],
                          agent['contact'],
                          agent['wind'],
-                         agent['fuel']],
+                         agent['fuel'],
+                         platform['px'],
+                         platform['py']],
                          # e1,
                          # e2,
                          # e3],
@@ -36,7 +40,7 @@ def featureExtractor(state, action=None):
 def solve():
     # Setup agent and experience replay
     client = F9GameClient()
-    ai = QMLPMultiActionAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
+    ai = QMLPMultiActionAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM, MAX_ITERS)
     # ai = QAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
     state = client.curState
     scores = []
