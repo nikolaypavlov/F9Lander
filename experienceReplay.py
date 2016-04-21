@@ -44,7 +44,7 @@ class PrioritizedExperienceReplay():
 
     def append(self, state, action, reward, next_state, count=0, td_err=None):
         if count < self.min_usages or self.getSize() < self.clean_at:
-            priority = (abs(td_err) + np.finfo(np.float32).eps) ** self.alpha
+            priority = (abs(td_err) + np.finfo(np.float32).eps) ** self._alpha
             transition = (priority, (state, action, reward, next_state), count)
             self.experience.add(transition)
             self.sum += priority
