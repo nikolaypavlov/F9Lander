@@ -4,6 +4,7 @@
 # -------------------------------------------------- #
 
 import numpy as np
+import argparse
 from qMLPMultiAction import QMLPMultiActionAgent
 # from qAgent import QAgent
 from F9utils import F9GameClient
@@ -14,7 +15,7 @@ import time
 # -------------------------------------------------- #
 
 FEATURES_NUM = 11
-MAX_ITERS = 1000000
+MAX_ITERS = 500000
 
 def featureExtractor(state, action=None):
     agent, platform, _ = state
@@ -38,9 +39,15 @@ def featureExtractor(state, action=None):
     return features
 
 def solve():
+    # Command line options
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--predict", action="store_true", help="Do not train the model, predict only mode")
+    #
+    args = parser.parse_args()
+
     # Setup agent and experience replay
     client = F9GameClient()
-    ai = QMLPMultiActionAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM, MAX_ITERS)
+    ai = QMLPMultiActionAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM, MAX_ITERS, args.predict)
     # ai = QAgent(client.actions, featureExtractor, client.isTerminalState, FEATURES_NUM)
     state = client.curState
     scores = []

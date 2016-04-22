@@ -40,7 +40,7 @@ BETA = 0.6
 
 class QMLPMultiActionAgent(RLAgent):
     """Q-Learning agent with MLP function approximation"""
-    def __init__(self, actions, featureExtractor, isTerminalState, featuresNum, max_iters):
+    def __init__(self, actions, featureExtractor, isTerminalState, featuresNum, max_iters, prediction_mode=False):
         self.actions = actions
         self.actionsNum = len(actions())
         self.featuresNum = featuresNum
@@ -51,6 +51,8 @@ class QMLPMultiActionAgent(RLAgent):
         self.max_iters = max_iters
         self.total_reward = 0
         self.gamma = GAMMA
+        self.prediction_mode = prediction_mode
+        self.start_learning = False
         self.replay = PrioritizedExperienceReplay(alpha=ALPHA, capacity=MIN_REPLAY_SIZE, batch_size=BATCH_SIZE)
         self.stats = {}
 
@@ -128,7 +130,7 @@ class QMLPMultiActionAgent(RLAgent):
     # Epsilon-greedy policy
     def getAction(self, state):
         self.numIters += 1
-        if self.replay.getSize() < MIN_REPLAY_SIZE or random.random() < self.explorationProb:
+        if not self.prediction_mode and (not self.start_learning or random.random() < self.explorationProb):
             return random.choice(self.actions(state))
         else:
             return self._getOptAction(state)
@@ -136,48 +138,53 @@ class QMLPMultiActionAgent(RLAgent):
     def provideFeedback(self, state, action, reward, new_state):
         self.replay.append(state, action, reward, new_state) # Put new data to experience replay
         self.total_reward += reward
-
         if self.replay.getSize() >= MIN_REPLAY_SIZE:
-            # totalPriority = self.replay.sum
-            batch = self.replay.mini_batch()
-            target = np.zeros((BATCH_SIZE, self.actionsNum), dtype=np.float64)
-            features = np.zeros((BATCH_SIZE, self.featuresNum), dtype=np.float64)
+            self.start_learning = True
 
-            for i, sars in enumerate(batch):
-                ((b_state, b_action, b_reward, b_new_state), count, _) = sars
-                features[i] = self.featureExtractor(b_state)
+        if not self.prediction_mode:
+            if self.start_learning and self.replay.getSize() >= MIN_REPLAY_SIZE:
+                # totalPriority = self.replay.sum
+                batch = self.replay.mini_batch()
+                target = np.zeros((BATCH_SIZE, self.actionsNum), dtype=np.float64)
+                features = np.zeros((BATCH_SIZE, self.featuresNum), dtype=np.float64)
 
-                if self.isTerminalState(b_new_state):
-                    target[i].fill(b_reward)
-                else:
-                    # Double Q-learning target
-                    act = np.argmax(self.predict(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX)), 1)
-                    q_vals = self.predictTarget(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
-                    t = b_reward + self.gamma * np.ravel(q_vals)
-                    target[i] = np.tile(t[act] - 1, self.actionsNum)
-                    target[i][act] = t[act]
+                for i, sars in enumerate(batch):
+                    ((b_state, b_action, b_reward, b_new_state), count, _) = sars
+                    features[i] = self.featureExtractor(b_state)
 
-            assert(target.shape == (BATCH_SIZE, self.actionsNum))
-            loss, target_val, net_out, err, maxQ_idx = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
-            self.explorationProb -= (EPS0 - EPS) / (self.max_iters - MIN_REPLAY_SIZE)
-            assert(np.sum(np.invert(np.isclose(target_val, net_out))) <= BATCH_SIZE)
+                    if self.isTerminalState(b_new_state):
+                        target[i].fill(b_reward)
+                    else:
+                        # Double Q-learning target
+                        act = np.argmax(self.predict(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX)), 1)
+                        q_vals = self.predictTarget(self.featureExtractor(b_new_state).reshape(-1, self.featuresNum).astype(theano.config.floatX))
+                        t = b_reward + self.gamma * np.ravel(q_vals)
+                        target[i] = np.tile(t[act] - 1, self.actionsNum)
+                        target[i][act] = t[act]
 
-            for i, sars in enumerate(batch):
-                ((b_state, b_action, b_reward, b_new_state), count, _) = sars
-                self.replay.append(b_state, b_action, b_reward, b_new_state, count, err[i])
+                assert(target.shape == (BATCH_SIZE, self.actionsNum))
+                loss, target_val, net_out, err, maxQ_idx = self.train(features.astype(theano.config.floatX), target.astype(theano.config.floatX))
+                self.explorationProb -= (EPS0 - EPS) / (self.max_iters - MIN_REPLAY_SIZE)
+                assert(np.sum(np.invert(np.isclose(target_val, net_out))) <= BATCH_SIZE)
 
-            logging.info("Iteration: %s Replay size: %s TD-err: %s Reward: %s Action %s Epsilon: %s" %\
-                            (self.numIters, self.replay.getSize(), loss, reward, action, self.explorationProb))
-            logging.debug("maxQ_idx %s" % maxQ_idx)
-            keys, values = zip(*sorted(self.replay.range_stats.items(), key=lambda x: x[0][0]))
-            range_stats = np.array(values) / self.replay.range_count
-            logging.debug("Priority stats %s" % zip(keys, np.diff(range_stats)))
+                for i, sars in enumerate(batch):
+                    ((b_state, b_action, b_reward, b_new_state), count, _) = sars
+                    self.replay.append(b_state, b_action, b_reward, b_new_state, count, err[i])
 
-        if self.numIters % SYNC_TARGET_MODEL == 0:
-            self._syncModel()
+                logging.info("Iteration: %s Replay size: %s TD-err: %s Reward: %s Action %s Epsilon: %s" %\
+                                (self.numIters, self.replay.getSize(), loss, reward, action, self.explorationProb))
+                logging.debug("maxQ_idx %s" % maxQ_idx)
+                keys, values = zip(*sorted(self.replay.range_stats.items(), key=lambda x: x[0][0]))
+                range_stats = np.array(values) / self.replay.range_count
+                logging.debug("Priority stats %s" % zip(keys, np.diff(range_stats)))
 
-        if self.numIters % SNAPSHOT_EVERY == 0:
-            self._save_snapshot()
+            if self.numIters % SYNC_TARGET_MODEL == 0:
+                self._syncModel()
+
+            if self.numIters % SNAPSHOT_EVERY == 0:
+                self._save_snapshot()
+        else:
+            logging.info("Iteration: %s Reward: %s Action %s" % (self.numIters, reward, action))
 
     # def _sampling_weight(num, priority, totalPriority):
     #     weigth = (1.0 / self.maxW) * 1.0 / (num * priority / totalPriority) ** BETA
